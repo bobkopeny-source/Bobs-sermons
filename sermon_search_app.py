@@ -52,71 +52,37 @@ def extract_paragraphs(text):
     # Filter out very short paragraphs
     return [p.strip() for p in paragraphs if len(p.strip()) > 100]
 
-def find_relevant_passages(transcript, query_words, max_passages=2):
+def find_relevant_passages(transcript, query_words, max_passages=3):
     """Find the most relevant passages from a transcript"""
-    # Split into sentences
-    sentences = re.split(r'[.!?]+\s+', transcript)
+    paragraphs = extract_paragraphs(transcript)
     
-    # Score each sentence
-    scored_sentences = []
-    for sentence in sentences:
-        if len(sentence) < 50:  # Skip very short sentences
-            continue
-            
-        sentence_lower = sentence.lower()
+    scored_paragraphs = []
+    for para in paragraphs:
+        para_lower = para.lower()
         score = 0
         
         # Score based on query word presence
         for word in query_words:
-            if len(word) > 4:  # Only score meaningful words
-                if word in sentence_lower:
-                    score += 10
-                    # Bonus if word appears multiple times
-                    score += sentence_lower.count(word) * 5
+            if len(word) > 3:
+                count = para_lower.count(word)
+                score += count * 10
         
         if score > 0:
-            scored_sentences.append({
-                'text': sentence.strip(),
-                'score': score,
-                'position': transcript.find(sentence)
+            scored_paragraphs.append({
+                'text': para,
+                'score': score
             })
     
-    # Sort by score
-    scored_sentences.sort(key=lambda x: x['score'], reverse=True)
-    
-    # Get top sentences and add context
-    passages = []
-    for item in scored_sentences[:max_passages]:
-        # Find the sentence position in transcript
-        pos = item['position']
-        
-        # Get surrounding context (2 sentences before and after)
-        start = max(0, pos - 200)
-        end = min(len(transcript), pos + len(item['text']) + 200)
-        
-        passage = transcript[start:end].strip()
-        
-        # Clean up
-        if start > 0:
-            passage = "..." + passage
-        if end < len(transcript):
-            passage = passage + "..."
-        
-        passages.append(passage)
-    
-    return passages
+    # Sort by score and return top passages
+    scored_paragraphs.sort(key=lambda x: x['score'], reverse=True)
+    return [p['text'] for p in scored_paragraphs[:max_passages]]
 
 def search_sermons_v2(query, max_results=10):
     """
-    Enhanced search with better relevance and focused passages
+    Enhanced search with better relevance and multiple passages
     """
     query_lower = query.lower()
-    # Only use meaningful words (5+ characters) for search
-    query_words = [w for w in query_lower.split() if len(w) >= 5]
-    
-    # If no meaningful words, use all words over 3 characters
-    if not query_words:
-        query_words = [w for w in query_lower.split() if len(w) > 3]
+    query_words = [w for w in query_lower.split() if len(w) > 2]
     
     results = []
     
@@ -131,27 +97,24 @@ def search_sermons_v2(query, max_results=10):
         title_lower = title.lower()
         for word in query_words:
             if word in title_lower:
-                score += 30
-        
-        # Full phrase in transcript (very relevant)
-        transcript_lower = transcript.lower()
-        if len(query_words) > 1:
-            # Check for meaningful phrase (any 2+ meaningful words together)
-            phrase = ' '.join(query_words[:2])
-            if phrase in transcript_lower:
                 score += 20
         
-        # Individual word frequency (but not too much weight)
+        # Full phrase in transcript
+        transcript_lower = transcript.lower()
+        if query_lower in transcript_lower:
+            score += 10
+        
+        # Individual word frequency
         for word in query_words:
-            count = transcript_lower.count(word)
-            if count > 0:
-                score += min(count * 2, 20)  # Cap at 20 points per word
+            if len(word) > 3:
+                count = transcript_lower.count(word)
+                score += count
         
         if score == 0:
             continue
         
         # Find relevant passages
-        passages = find_relevant_passages(transcript, query_words, max_passages=2)
+        passages = find_relevant_passages(transcript, query_words, max_passages=3)
         
         if passages:
             results.append({
@@ -546,9 +509,9 @@ def home():
                             <span>📝 ${sermon.word_count.toLocaleString()} words</span>
                         </div>
                         <div class="relevance-badge">${sermon.relevance}</div>
-                        ${sermon.passages.slice(0, 2).map((passage, idx) => `
+                        ${sermon.passages.map((passage, idx) => `
                             <div class="passage">${highlightKeywords(passage, query)}</div>
-                            ${idx < Math.min(sermon.passages.length, 2) - 1 ? '<div class="passage-separator">• • •</div>' : ''}
+                            ${idx < sermon.passages.length - 1 ? '<div class="passage-separator">• • •</div>' : ''}
                         `).join('')}
                         ${sermon.url ? `<a href="${sermon.url}" target="_blank" class="watch-button">▶️ Watch Full Sermon</a>` : ''}
                     </div>
@@ -569,18 +532,17 @@ def home():
             let highlighted = text;
             
             words.forEach(word => {
-                // Only highlight meaningful words (5+ characters)
-                // This avoids highlighting "what", "does", etc.
-                if (word.length >= 5) {
-                    // Simple case-insensitive replacement
-                    const parts = highlighted.split(new RegExp('(' + word + ')', 'gi'));
-                    highlighted = parts.map((part, i) => 
-                        i % 2 === 1 ? '<strong style="background: #fff59d; padding: 2px 4px; border-radius: 3px;">' + part + '</strong>' : part
-                    ).join('');
+                if (word.length > 3) {
+                    const regex = new RegExp(`(${escapeRegex(word)})`, 'gi');
+                    highlighted = highlighted.replace(regex, '<strong style="background: #fff59d; padding: 2px 4px; border-radius: 3px;">$1</strong>');
                 }
             });
             
             return highlighted;
+        }
+        
+        function escapeRegex(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         }
     </script>
 </body>
