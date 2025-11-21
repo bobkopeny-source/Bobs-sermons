@@ -17,21 +17,34 @@ CORS(app)
 
 print("Loading sermon database (memory optimized)...")
 
+# DEBUG: Show current directory and files
+import os
+print(f"Current directory: {os.getcwd()}")
+print(f"Files in current directory:")
+for item in os.listdir('.'):
+    size = os.path.getsize(item) if os.path.isfile(item) else 0
+    print(f"  - {item} ({size / (1024*1024):.2f} MB)")
+
 # Global variable for sermon index (lightweight)
 SERMON_INDEX = []
 DATABASE_FILE = None
 
 # Find database file
 possible_files = [
-    'PASTOR_BOB_COMPLETE_716_TIMESTAMPS.json.gz',
-    'PASTOR_BOB_COMPLETE_716_TIMESTAMPS.json',
+    'PASTOR_BOB_COMPLETE_CLEAN_FILTERED.json.gz',
+    'PASTOR_BOB_COMPLETE_CLEAN_FILTERED.json',
+    'PASTOR_BOB_COMPLETE_MERGED.json.gz',
+    'PASTOR_BOB_COMPLETE_MERGED.json',
 ]
 
 for filename in possible_files:
+    print(f"Checking for: {filename}")
     if os.path.exists(filename):
         DATABASE_FILE = filename
         print(f"Found: {filename}")
         break
+    else:
+        print(f"  Not found: {filename}")
 
 if not DATABASE_FILE:
     print("❌ ERROR: Sermon database file not found!")
@@ -214,7 +227,7 @@ def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ask Pastor Bob - Sermon Search</title>
+    <title>Ask Pastor Bob - Search 2,016 Sermons</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -371,12 +384,12 @@ def home():
     <div class="container">
         <div class="header">
             <h1>🎤 Ask Pastor Bob</h1>
-            <p>Search 716 sermons with clickable timestamps</p>
+            <p>Search 2,016 sermons with clickable timestamps</p>
         </div>
         
         <div class="stats">
-            <div class="stats-number">716</div>
-            <div>Complete Sermons with Clickable Timestamps</div>
+            <div class="stats-number">2,016</div>
+            <div>Complete Sermons (714 with Clickable Timestamps)</div>
         </div>
         
         <div class="search-box">
@@ -390,7 +403,7 @@ def home():
         </div>
         
         <div class="loading" id="loading">
-            🔍 Searching 716 sermons...
+            🔍 Searching 2,016 sermons...
         </div>
         
         <div class="results" id="results">
