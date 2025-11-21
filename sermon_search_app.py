@@ -10,80 +10,47 @@ import json
 import gzip
 import os
 import re
-import gc
 
 app = Flask(__name__)
 CORS(app)
 
-print("Loading sermon database (memory optimized)...")
+print("Loading sermon database...")
 
-# Global variable for sermon index (lightweight)
-SERMON_INDEX = []
-DATABASE_FILE = None
+# Load EVERYTHING at startup and keep in memory
+SERMONS = []
 
 # Find database file
 possible_files = [
+    'PASTOR_BOB_MINIMAL.json.gz',
+    'PASTOR_BOB_MINIMAL.json',
     'PASTOR_BOB_TIMESTAMPS_ONLY.json.gz',
-    'PASTOR_BOB_TIMESTAMPS_ONLY.json',
-    'PASTOR_BOB_COMPLETE_CLEAN_FILTERED.json.gz',
-    'PASTOR_BOB_COMPLETE_CLEAN_FILTERED.json',
 ]
 
+DATABASE_FILE = None
 for filename in possible_files:
     if os.path.exists(filename):
         DATABASE_FILE = filename
         print(f"Found: {filename}")
         break
 
-if not DATABASE_FILE:
-    print("❌ ERROR: Sermon database file not found!")
-else:
-    # Load only the INDEX (without full transcripts) to save memory
-    print("Building sermon index...")
+if DATABASE_FILE:
     try:
+        print("Loading all sermons into memory...")
         if DATABASE_FILE.endswith('.gz'):
             with gzip.open(DATABASE_FILE, 'rt', encoding='utf-8') as f:
-                sermons = json.load(f)
+                SERMONS = json.load(f)
         else:
             with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
-                sermons = json.load(f)
+                SERMONS = json.load(f)
         
-        # Create lightweight index
-        for sermon in sermons:
-            SERMON_INDEX.append({
-                'video_id': sermon.get('video_id', ''),
-                'url': sermon.get('url', ''),
-                'word_count': sermon.get('word_count', 0),
-                'transcript_length': len(sermon.get('transcript', '')),
-                'has_timestamps': len(sermon.get('timestamps', [])) > 0
-            })
-        
-        # Clear the full sermon data from memory
-        del sermons
-        gc.collect()
-        
-        print(f"✅ Loaded index for {len(SERMON_INDEX)} sermons")
-        print(f"Memory usage optimized - full data loaded on demand")
+        print(f"✅ Loaded {len(SERMONS)} sermons into memory")
+        print("✅ Ready for instant searches!")
         
     except Exception as e:
         print(f"❌ Error loading database: {e}")
-        SERMON_INDEX = []
-
-def load_sermons_on_demand():
-    """Load full sermon data only when needed"""
-    if not DATABASE_FILE:
-        return []
-    
-    try:
-        if DATABASE_FILE.endswith('.gz'):
-            with gzip.open(DATABASE_FILE, 'rt', encoding='utf-8') as f:
-                return json.load(f)
-        else:
-            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading sermons: {e}")
-        return []
+        SERMONS = []
+else:
+    print("❌ ERROR: Sermon database file not found!")
 
 def extract_search_terms(query):
     """Extract meaningful search terms from natural language questions"""
@@ -162,7 +129,7 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
     return selected
 
 def search_sermons_with_timestamps(query, max_results=10):
-    """Search with on-demand loading to save memory"""
+    """Search using pre-loaded sermons in memory"""
     search_terms = extract_search_terms(query)
     
     if not search_terms:
@@ -170,15 +137,13 @@ def search_sermons_with_timestamps(query, max_results=10):
     
     print(f"Searching for: {search_terms}")
     
-    # Load full data on demand
-    sermons = load_sermons_on_demand()
-    
-    if not sermons:
+    if not SERMONS:
+        print("ERROR: No sermons loaded!")
         return []
     
     results = []
     
-    for sermon in sermons:
+    for sermon in SERMONS:
         transcript = sermon.get('transcript', '').lower()
         score = 0
         
@@ -196,14 +161,9 @@ def search_sermons_with_timestamps(query, max_results=10):
             results.append({
                 'video_id': sermon.get('video_id', ''),
                 'url': sermon.get('url', ''),
-                'word_count': sermon.get('word_count', 0),
                 'segments': segments,
                 'score': score
             })
-    
-    # Clear from memory after search
-    del sermons
-    gc.collect()
     
     results.sort(key=lambda x: x['score'], reverse=True)
     
@@ -496,7 +456,7 @@ def api_search_timestamps():
     
     return jsonify({
         'query': query,
-        'total_sermons': len(SERMON_INDEX),
+        'total_sermons': len(SERMONS),
         'results_count': len(results),
         'results': results
     })
@@ -505,18 +465,17 @@ def api_search_timestamps():
 def api_stats():
     """Get statistics"""
     return jsonify({
-        'total_sermons': len(SERMON_INDEX),
-        'memory_optimized': True
+        'total_sermons': len(SERMONS),
+        'loaded_in_memory': True
     })
 
 if __name__ == '__main__':
-    if not DATABASE_FILE or len(SERMON_INDEX) == 0:
+    if not SERMONS or len(SERMONS) == 0:
         print("\n❌ ERROR: No sermons loaded!")
         exit(1)
     
-    print("\n✅ Sermon Search App Ready (Memory Optimized)!")
-    print(f"📚 Index loaded for {len(SERMON_INDEX)} sermons")
-    print(f"💾 Full data loaded on-demand to save memory")
+    print("\n✅ Sermon Search App Ready!")
+    print(f"📚 {len(SERMONS)} sermons loaded in memory")
     print("\n🌐 Starting server...")
     
     port = int(os.environ.get('PORT', 5000))
