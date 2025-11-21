@@ -86,7 +86,9 @@ def extract_search_terms(query):
     return list(set(stemmed))
 
 def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
-    """Find the most relevant timestamped segments"""
+    """
+    Find the most relevant timestamped segments with surrounding context
+    """
     timestamps = sermon.get('timestamps', [])
     
     if not timestamps:
@@ -94,7 +96,7 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
     
     scored_segments = []
     
-    for segment in timestamps:
+    for i, segment in enumerate(timestamps):
         text = segment.get('text', '').lower()
         score = 0
         
@@ -103,10 +105,17 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
                 score += text.count(term) * 10
         
         if score > 0:
+            # Get surrounding segments for context (2 before, current, 2 after)
+            start_idx = max(0, i - 2)
+            end_idx = min(len(timestamps), i + 3)
+            
+            context_segments = timestamps[start_idx:end_idx]
+            context_text = ' '.join(seg.get('text', '') for seg in context_segments)
+            
             scored_segments.append({
                 'timestamp': segment.get('time', '0:00'),
                 'seconds': segment.get('seconds', 0),
-                'text': segment.get('text', ''),
+                'text': context_text[:300],  # Limit to 300 chars
                 'score': score
             })
     
@@ -127,6 +136,29 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
     selected.sort(key=lambda x: x['seconds'])
     
     return selected
+
+def generate_summary_from_results(results, search_terms, max_passages=5):
+    """
+    Generate a summary by combining the most relevant passages
+    """
+    if not results:
+        return ""
+    
+    # Collect top passages from all results
+    all_passages = []
+    for result in results[:3]:  # Top 3 sermons
+        for segment in result.get('segments', [])[:2]:  # Top 2 segments per sermon
+            all_passages.append(segment.get('text', ''))
+    
+    # Combine and limit length
+    summary = ' '.join(all_passages[:max_passages])
+    
+    # Clean up
+    summary = summary.strip()
+    if len(summary) > 800:
+        summary = summary[:800] + "..."
+    
+    return summary
 
 def search_sermons_with_timestamps(query, max_results=10):
     """Search using pre-loaded sermons in memory"""
@@ -327,6 +359,28 @@ def home():
             font-size: 2.5em;
             font-weight: bold;
         }
+        
+        .summary-box {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            border-left: 5px solid #667eea;
+        }
+        
+        .summary-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+        
+        .summary-text {
+            color: #333;
+            line-height: 1.8;
+            font-size: 1.05em;
+        }
     </style>
 </head>
 <body>
@@ -391,7 +445,7 @@ def home():
                 }
                 
                 if (data.results.length > 0) {
-                    displayResults(data.results, query);
+                    displayResults(data.results, query, data.summary || '');
                 } else {
                     document.getElementById('results').innerHTML = '<p style="color:white;text-align:center">No sermons found. Try different keywords.</p>';
                     document.getElementById('results').style.display = 'block';
@@ -404,7 +458,7 @@ def home():
             }
         }
         
-        function displayResults(results, query) {
+        function displayResults(results, query, summary) {
             const resultCount = document.getElementById('resultCount');
             const resultsList = document.getElementById('resultsList');
             
@@ -420,7 +474,21 @@ def home():
             
             resultCount.textContent = `Found ${validResults.length} sermons about "${query}"`;
             
-            resultsList.innerHTML = validResults.map(sermon => `
+            // Build HTML with summary at top
+            let html = '';
+            
+            // Add summary if available
+            if (summary && summary.trim()) {
+                html += `
+                    <div class="summary-box">
+                        <div class="summary-title">📖 What Pastor Bob Teaches About "${query}":</div>
+                        <div class="summary-text">${summary}</div>
+                    </div>
+                `;
+            }
+            
+            // Add sermon results
+            html += validResults.map(sermon => `
                 <div class="sermon-card">
                     ${sermon.segments.map((seg, idx) => `
                         <div class="timestamp-segment">
@@ -435,6 +503,7 @@ def home():
                 </div>
             `).join('');
             
+            resultsList.innerHTML = html;
             document.getElementById('results').style.display = 'block';
         }
     </script>
@@ -453,9 +522,11 @@ def api_search_timestamps():
         return jsonify({'error': 'No query provided'}), 400
     
     results = search_sermons_with_timestamps(query, max_results)
+    summary = generate_summary_from_results(results, extract_search_terms(query))
     
     return jsonify({
         'query': query,
+        'summary': summary,
         'total_sermons': len(SERMONS),
         'results_count': len(results),
         'results': results
