@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Pastor Bob Sermon Search App - WITH CLICKABLE TIMESTAMPS
-Searches 716 sermons and provides clickable YouTube timestamp links
+Pastor Bob Sermon Search App - MEMORY OPTIMIZED
+Searches 716 sermons with clickable timestamps - optimized for 512MB RAM
 """
 
 from flask import Flask, request, jsonify, render_template_string
@@ -10,39 +10,78 @@ import json
 import gzip
 import os
 import re
+import gc
 
 app = Flask(__name__)
 CORS(app)
 
-print("Loading sermon database with timestamps...")
-SERMONS = []
+print("Loading sermon database (memory optimized)...")
 
-# Try multiple possible filenames
+# Global variable for sermon index (lightweight)
+SERMON_INDEX = []
+DATABASE_FILE = None
+
+# Find database file
 possible_files = [
     'PASTOR_BOB_COMPLETE_716_TIMESTAMPS.json.gz',
     'PASTOR_BOB_COMPLETE_716_TIMESTAMPS.json',
-    'PASTOR_BOB_SERMONS_COMPLETE_CLEAN.json.gz',
-    'PASTOR_BOB_SERMONS_COMPLETE_CLEAN.json',
 ]
 
 for filename in possible_files:
     if os.path.exists(filename):
+        DATABASE_FILE = filename
         print(f"Found: {filename}")
-        try:
-            if filename.endswith('.gz'):
-                with gzip.open(filename, 'rt', encoding='utf-8') as f:
-                    SERMONS = json.load(f)
-            else:
-                with open(filename, 'r', encoding='utf-8') as f:
-                    SERMONS = json.load(f)
-            print(f"✅ Loaded {len(SERMONS)} sermons")
-            break
-        except Exception as e:
-            print(f"Error loading {filename}: {e}")
-            continue
+        break
 
-if not SERMONS:
+if not DATABASE_FILE:
     print("❌ ERROR: Sermon database file not found!")
+else:
+    # Load only the INDEX (without full transcripts) to save memory
+    print("Building sermon index...")
+    try:
+        if DATABASE_FILE.endswith('.gz'):
+            with gzip.open(DATABASE_FILE, 'rt', encoding='utf-8') as f:
+                sermons = json.load(f)
+        else:
+            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                sermons = json.load(f)
+        
+        # Create lightweight index
+        for sermon in sermons:
+            SERMON_INDEX.append({
+                'video_id': sermon.get('video_id', ''),
+                'url': sermon.get('url', ''),
+                'word_count': sermon.get('word_count', 0),
+                'transcript_length': len(sermon.get('transcript', '')),
+                'has_timestamps': len(sermon.get('timestamps', [])) > 0
+            })
+        
+        # Clear the full sermon data from memory
+        del sermons
+        gc.collect()
+        
+        print(f"✅ Loaded index for {len(SERMON_INDEX)} sermons")
+        print(f"Memory usage optimized - full data loaded on demand")
+        
+    except Exception as e:
+        print(f"❌ Error loading database: {e}")
+        SERMON_INDEX = []
+
+def load_sermons_on_demand():
+    """Load full sermon data only when needed"""
+    if not DATABASE_FILE:
+        return []
+    
+    try:
+        if DATABASE_FILE.endswith('.gz'):
+            with gzip.open(DATABASE_FILE, 'rt', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            with open(DATABASE_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading sermons: {e}")
+        return []
 
 def extract_search_terms(query):
     """Extract meaningful search terms from natural language questions"""
@@ -78,13 +117,10 @@ def extract_search_terms(query):
     return list(set(stemmed))
 
 def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
-    """
-    Find the most relevant timestamped segments that contain search terms
-    """
+    """Find the most relevant timestamped segments"""
     timestamps = sermon.get('timestamps', [])
     
     if not timestamps:
-        # Fallback to plain text if no timestamps
         return []
     
     scored_segments = []
@@ -93,7 +129,6 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
         text = segment.get('text', '').lower()
         score = 0
         
-        # Score each segment
         for term in search_terms:
             if term in text:
                 score += text.count(term) * 10
@@ -106,7 +141,6 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
                 'score': score
             })
     
-    # Sort by score and get top segments
     scored_segments.sort(key=lambda x: x['score'], reverse=True)
     
     # Get top segments, ensuring they're spread out
@@ -114,7 +148,6 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
     last_seconds = -999
     
     for seg in scored_segments:
-        # Only include if at least 60 seconds from last segment
         if seg['seconds'] - last_seconds > 60 or len(selected) == 0:
             selected.append(seg)
             last_seconds = seg['seconds']
@@ -122,25 +155,31 @@ def find_relevant_timestamp_segments(sermon, search_terms, max_segments=3):
             if len(selected) >= max_segments:
                 break
     
-    # Sort selected by time
     selected.sort(key=lambda x: x['seconds'])
     
     return selected
 
 def search_sermons_with_timestamps(query, max_results=10):
-    """Enhanced search with timestamps"""
+    """Search with on-demand loading to save memory"""
     search_terms = extract_search_terms(query)
     
     if not search_terms:
         search_terms = [w for w in query.lower().split() if len(w) >= 4]
     
+    print(f"Searching for: {search_terms}")
+    
+    # Load full data on demand
+    sermons = load_sermons_on_demand()
+    
+    if not sermons:
+        return []
+    
     results = []
     
-    for sermon in SERMONS:
+    for sermon in sermons:
         transcript = sermon.get('transcript', '').lower()
         score = 0
         
-        # Calculate relevance
         for term in search_terms:
             count = transcript.count(term)
             if count > 0:
@@ -149,10 +188,8 @@ def search_sermons_with_timestamps(query, max_results=10):
         if score == 0:
             continue
         
-        # Find relevant timestamped segments
         segments = find_relevant_timestamp_segments(sermon, search_terms, max_segments=3)
         
-        # Only include if we found valid segments
         if segments and len(segments) > 0:
             results.append({
                 'video_id': sermon.get('video_id', ''),
@@ -162,7 +199,10 @@ def search_sermons_with_timestamps(query, max_results=10):
                 'score': score
             })
     
-    # Sort by relevance
+    # Clear from memory after search
+    del sermons
+    gc.collect()
+    
     results.sort(key=lambda x: x['score'], reverse=True)
     
     return results[:max_results]
@@ -174,7 +214,7 @@ def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ask Pastor Bob - Sermon Search with Timestamps</title>
+    <title>Ask Pastor Bob - Sermon Search</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -379,22 +419,18 @@ def home():
                 }
                 
                 const data = await response.json();
-                console.log('API Response:', data); // Debug logging
                 
                 document.getElementById('loading').style.display = 'none';
                 
-                if (!data) {
-                    console.error('No data received from API');
-                    document.getElementById('results').innerHTML = '<p style="color:white;text-align:center">Error: No data received. Please try again.</p>';
+                if (!data || !data.results) {
+                    document.getElementById('results').innerHTML = '<p style="color:white;text-align:center">Error loading results. Please try again.</p>';
                     document.getElementById('results').style.display = 'block';
                     return;
                 }
                 
-                if (data.results && Array.isArray(data.results) && data.results.length > 0) {
-                    console.log('Displaying', data.results.length, 'results');
+                if (data.results.length > 0) {
                     displayResults(data.results, query);
                 } else {
-                    console.log('No results found or invalid results array');
                     document.getElementById('results').innerHTML = '<p style="color:white;text-align:center">No sermons found. Try different keywords.</p>';
                     document.getElementById('results').style.display = 'block';
                 }
@@ -407,28 +443,12 @@ def home():
         }
         
         function displayResults(results, query) {
-            console.log('displayResults called with:', results);
-            
-            if (!results || !Array.isArray(results)) {
-                console.error('Results is not an array:', results);
-                document.getElementById('results').innerHTML = '<p style="color:white;text-align:center">Error displaying results. Please try again.</p>';
-                document.getElementById('results').style.display = 'block';
-                return;
-            }
-            
             const resultCount = document.getElementById('resultCount');
             const resultsList = document.getElementById('resultsList');
             
-            // Filter out results without segments
-            const validResults = results.filter(sermon => {
-                const hasSegments = sermon && sermon.segments && Array.isArray(sermon.segments) && sermon.segments.length > 0;
-                if (!hasSegments) {
-                    console.warn('Sermon missing valid segments:', sermon);
-                }
-                return hasSegments;
-            });
-            
-            console.log('Valid results after filtering:', validResults.length);
+            const validResults = results.filter(sermon => 
+                sermon && sermon.segments && Array.isArray(sermon.segments) && sermon.segments.length > 0
+            );
             
             if (validResults.length === 0) {
                 document.getElementById('results').innerHTML = '<p style="color:white;text-align:center">No sermons found with timestamps. Try different keywords.</p>';
@@ -438,28 +458,22 @@ def home():
             
             resultCount.textContent = `Found ${validResults.length} sermons about "${query}"`;
             
-            try {
-                resultsList.innerHTML = validResults.map(sermon => `
-                    <div class="sermon-card">
-                        ${sermon.segments.map((seg, idx) => `
-                            <div class="timestamp-segment">
-                                <a href="${sermon.url}&t=${seg.seconds}s" target="_blank" class="timestamp-link">
-                                    ⏱️ Jump to ${seg.timestamp}
-                                </a>
-                                <div class="segment-text">"${seg.text}"</div>
-                            </div>
-                            ${idx < sermon.segments.length - 1 ? '<div class="segment-separator">• • •</div>' : ''}
-                        `).join('')}
-                        <a href="${sermon.url}" target="_blank" class="watch-full">▶️ Watch Full Sermon</a>
-                    </div>
-                `).join('');
-                
-                document.getElementById('results').style.display = 'block';
-            } catch (error) {
-                console.error('Error rendering results:', error);
-                document.getElementById('results').innerHTML = '<p style="color:white;text-align:center">Error rendering results: ' + error.message + '</p>';
-                document.getElementById('results').style.display = 'block';
-            }
+            resultsList.innerHTML = validResults.map(sermon => `
+                <div class="sermon-card">
+                    ${sermon.segments.map((seg, idx) => `
+                        <div class="timestamp-segment">
+                            <a href="${sermon.url}&t=${seg.seconds}s" target="_blank" class="timestamp-link">
+                                ⏱️ Jump to ${seg.timestamp}
+                            </a>
+                            <div class="segment-text">"${seg.text}"</div>
+                        </div>
+                        ${idx < sermon.segments.length - 1 ? '<div class="segment-separator">• • •</div>' : ''}
+                    `).join('')}
+                    <a href="${sermon.url}" target="_blank" class="watch-full">▶️ Watch Full Sermon</a>
+                </div>
+            `).join('');
+            
+            document.getElementById('results').style.display = 'block';
         }
     </script>
 </body>
@@ -480,7 +494,7 @@ def api_search_timestamps():
     
     return jsonify({
         'query': query,
-        'total_sermons': len(SERMONS),
+        'total_sermons': len(SERMON_INDEX),
         'results_count': len(results),
         'results': results
     })
@@ -488,22 +502,19 @@ def api_search_timestamps():
 @app.route('/api/stats')
 def api_stats():
     """Get statistics"""
-    total_words = sum(s.get('word_count', 0) for s in SERMONS)
-    total_timestamps = sum(len(s.get('timestamps', [])) for s in SERMONS)
-    
     return jsonify({
-        'total_sermons': len(SERMONS),
-        'total_words': total_words,
-        'total_timestamps': total_timestamps
+        'total_sermons': len(SERMON_INDEX),
+        'memory_optimized': True
     })
 
 if __name__ == '__main__':
-    if not SERMONS:
+    if not DATABASE_FILE or len(SERMON_INDEX) == 0:
         print("\n❌ ERROR: No sermons loaded!")
         exit(1)
     
-    print("\n✅ Sermon Search App with Timestamps Ready!")
-    print(f"📚 Loaded {len(SERMONS)} sermons")
+    print("\n✅ Sermon Search App Ready (Memory Optimized)!")
+    print(f"📚 Index loaded for {len(SERMON_INDEX)} sermons")
+    print(f"💾 Full data loaded on-demand to save memory")
     print("\n🌐 Starting server...")
     
     port = int(os.environ.get('PORT', 5000))
