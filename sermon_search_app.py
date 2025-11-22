@@ -21,7 +21,7 @@ SERMONS = []
 
 # Find database file
 possible_files = [
-    'PASTOR_BOB_MINIMAL.json.gz',
+    'PASTOR_BOB_SERMONS_ONLY.json.gz',
     'PASTOR_BOB_MINIMAL.json',
     'PASTOR_BOB_TIMESTAMPS_ONLY.json.gz',
 ]
